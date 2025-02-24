@@ -15,8 +15,8 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   # 2) FastAPI Application
-  api:
-    build: .
+  backend:
+    build: ./backend
     container_name: mvp_api
     depends_on:
       - db
@@ -28,6 +28,24 @@ services:
     ports:
       - "8000:8000"   # Host port : Container port
     # If you need environment variables for summarization or others, add them here.
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+      - frontend
 
 volumes:
   postgres_data:
