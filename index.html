@@ -2,322 +2,537 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Bullet Point Hierarchy</title>
+  <title>Team-Focused Summaries</title>
   <style>
     body {
       font-family: Arial, sans-serif;
       margin: 1em;
     }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1em;
+    }
+    .help-icon {
+      margin-left: 10px;
+      cursor: pointer;
+      color: #333;
+      font-weight: bold;
+      border: 1px solid #aaa;
+      border-radius: 50%;
+      padding: 0 5px;
+    }
+    .help-icon:hover {
+      background: #eee;
+    }
+
+    /* Onboarding overlay/wizard styles (optional) */
+    .overlay {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+      display: none; /* shown when active */
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
+    .overlay-content {
+      background: #fff;
+      padding: 2em;
+      max-width: 600px;
+      border-radius: 5px;
+    }
+    .overlay h2 {
+      margin-top: 0;
+    }
+
+    .team-info {
+      background: #f1f1f1;
+      padding: 1em;
+      margin-bottom: 1em;
+      border-radius: 4px;
+    }
     .section {
       border: 1px solid #ddd;
       padding: 1em;
       margin-bottom: 1em;
+      border-radius: 4px;
     }
-    .bullet-point {
-      margin-left: 20px; 
-      border-left: 2px solid #ccc;
-      padding-left: 10px;
-      margin-top: 10px;
+    .collapsible {
+      cursor: pointer;
+      font-weight: bold;
+      margin-top: 0.5em;
+      border: none;
+      background: #eee;
+      padding: 0.5em;
+      width: 100%;
+      text-align: left;
+      border-radius: 4px;
+      outline: none;
+    }
+    .collapsible:after {
+      content: ' \25BC'; /* down arrow */
+      float: right;
+    }
+    .active:after {
+      content: ' \25B2'; /* up arrow */
+    }
+    .collapsible-content {
+      display: none;
+      margin-left: 1em;
+      margin-top: 0.5em;
     }
     .invalid {
       color: red;
       font-weight: bold;
     }
+    .bullet-point {
+      padding: 0.5em 0;
+      border-bottom: 1px dashed #ccc;
+      cursor: pointer;
+    }
+    .bullet-point:hover {
+      background: #fafafa;
+    }
+
+    /* help / tutorial toggle area */
+    .help-section {
+      border: 1px solid #ccc;
+      background: #f9f9f9;
+      padding: 1em;
+      margin-bottom: 1em;
+      border-radius: 4px;
+      display: none; /* toggled on "Help" click */
+    }
+    .help-section h2 {
+      margin-top: 0;
+    }
   </style>
 </head>
 <body>
 
-  <h1>Bullet Point Hierarchy MVP</h1>
-
-  <!-- TEAM Creation -->
-  <div class="section">
-    <h2>Create Team</h2>
-    <label>Team Name:</label> <input id="teamName" type="text" /><br/>
-    <label>Echelon Level:</label> <input id="teamEchelon" type="text" value="Platoon"/><br/>
-    <label>Parent Team ID (optional):</label> <input id="teamParent" type="number"/><br/>
-    <button onclick="createTeam()">Create Team</button>
+  <!-- Optional Onboarding Wizard Overlay -->
+  <div class="overlay" id="onboardingOverlay">
+    <div class="overlay-content" id="onboardingContent">
+      <!-- We'll dynamically fill steps here or create a static set of steps -->
+      <h2>Welcome to Team-Focused Summaries!</h2>
+      <p>This short tutorial explains the recursive bullet-point approach, raw data vs. subordinate summaries, and how CCIR filtering works.</p>
+      <ol>
+        <li>
+          <strong>Your Team's Perspective:</strong><br/>
+          In this system, each team sees its <em>own raw data</em> plus bullet points from <em>subordinate teams</em>. 
+          You only manage or view what's relevant to your echelon.
+        </li>
+        <li>
+          <strong>Raw Data:</strong><br/>
+          SITREPs, logs, or sensor feeds your team generates. You can add them in “Create Raw Data.”
+        </li>
+        <li>
+          <strong>Summaries:</strong><br/>
+          Automatic bullet points are generated using your raw data + subordinate bullet points. 
+          If you provide a CCIR (keyword), the system filters only matching facts.
+        </li>
+        <li>
+          <strong>Data Provenance:</strong><br/>
+          Each bullet point references exactly which child bullet points or raw data formed its basis. 
+          Click a bullet point to see the full chain-of-custody.
+        </li>
+      </ol>
+      <p style="text-align:right;">
+        <button onclick="closeOnboarding()">Got It!</button>
+      </p>
+    </div>
   </div>
 
-  <!-- CCIR Creation -->
-  <div class="section">
-    <h2>Create CCIR</h2>
-    <label>Team ID:</label> <input id="ccirTeamId" type="number"/><br/>
-    <label>Description:</label> <input id="ccirDesc" type="text" size="50"/><br/>
-    <label>Keywords (comma-separated):</label> <input id="ccirKeywords" type="text" size="50"/><br/>
-    <button onclick="createCCIR()">Create CCIR</button>
+  <!-- Header area: page title, CCIR input, help icon -->
+  <div class="header">
+    <h1>Team-Focused Summaries</h1>
+    <div>
+      <input id="ccirKeyword" type="text" placeholder="Filter (CCIR)"/>
+      <button onclick="regenerateWithCCIR()">Regenerate Summaries</button>
+      <span class="help-icon" title="Click for help" onclick="toggleHelp()">?</span>
+    </div>
   </div>
 
-  <!-- Raw Data Creation -->
-  <div class="section">
-    <h2>Create Raw Data</h2>
-    <label>Team ID:</label> <input id="rawTeamId" type="number"/><br/>
-    <label>Content:</label><br/>
-    <textarea id="rawContent" rows="3" cols="60"></textarea><br/>
-    <label>Source Type:</label> <input id="rawSourceType" type="text" value="sitrep"/><br/>
-    <button onclick="createRaw()">Create Raw Data</button>
+  <!-- A collapsible help / how-it-works panel -->
+  <div class="help-section" id="helpSection">
+    <h2>How This System Works</h2>
+    <p>This platform uses a <strong>recursive</strong> approach to intelligence summarization:</p>
+    <ul>
+      <li>
+        <strong>Raw Data</strong>: SITREPs, logs, sensor feeds <em>owned by each team</em>. 
+        For instance, your platoon’s local observations.
+      </li>
+      <li>
+        <strong>Subordinate Summaries</strong>: Each subordinate team also produces bullet points, 
+        which get passed up to you. 
+        <em>This is automatic once you “Regenerate Summaries.”</em>
+      </li>
+      <li>
+        <strong>Combined Summary</strong>: Your team’s summary is just the bullet points from your subordinates 
+        plus your own raw data—optionally filtered by a <em>CCIR keyword</em>.
+      </li>
+      <li>
+        <strong>Provenance</strong>: Click any bullet point to see the chain of sources: 
+        child bullet points or raw data that formed it. 
+        This ensures <em>traceability</em> and <em>authenticity</em>.
+      </li>
+    </ul>
+    <p>
+      By repeating this up the chain, higher echelons see aggregated facts 
+      without reading every raw SITREP. 
+      <strong>That’s the beauty of recursion!</strong>
+    </p>
+    <button onclick="toggleHelp()">Close Help</button>
   </div>
 
-  <!-- Bullet Point Creation -->
+  <!-- TEAMS: pick my team ID -->
   <div class="section">
-    <h2>Create Bullet Point</h2>
-    <label>Team ID:</label> <input id="bpTeamId" type="number"/><br/>
-    <label>Echelon Level:</label> <input id="bpEchelon" type="text" value="Platoon"/><br/>
-    <label>Content:</label><br/>
-    <textarea id="bpContent" rows="3" cols="60"></textarea><br/>
-    <label>Child Bullet Points (comma-separated IDs):</label> <input id="bpChildren" type="text"/><br/>
-    <label>Child Raw Data (comma-separated IDs):</label> <input id="bpRawChildren" type="text"/><br/>
-    <button onclick="createBulletPoint()">Create BP</button>
+    <h2>Select Your Team</h2>
+    <p>
+      <label>Team ID:</label>
+      <input id="myTeamId" type="number" placeholder="e.g. 5" />
+      <button onclick="loadTeamPage()">Load Team Page</button>
+    </p>
   </div>
 
-  <!-- Link Bullet Points (Parent->Child) -->
-  <div class="section">
-    <h2>Link Bullet Points</h2>
-    <label>Parent ID:</label> <input id="linkParentId" type="number"/>
-    <label>Child ID:</label> <input id="linkChildId" type="number"/>
-    <button onclick="linkPoints()">Link Child</button>
+  <!-- TEAM INFO -->
+  <div class="team-info" id="teamInfoSection" style="display:none;">
+    <h2 id="teamNameLabel"></h2>
+    <p>Echelon: <span id="teamEchelonLabel"></span></p>
+    <p>Parent Team ID: <span id="teamParentLabel"></span></p>
   </div>
 
-  <!-- Invalidate a Bullet Point -->
-  <div class="section">
-    <h2>Invalidate Bullet Point</h2>
-    <label>BP ID:</label> <input id="invBpId" type="number"/>
-    <button onclick="invalidateBP()">Invalidate</button>
+  <!-- SUBORDINATES -->
+  <div class="section" id="subordinatesSection" style="display:none;">
+    <h2>Subordinate Teams</h2>
+    <div id="subordinatesContainer"></div>
   </div>
 
-  <!-- Display Global Hierarchy -->
-  <div class="section">
-    <h2>Global Bullet Point Hierarchy</h2>
-    <button onclick="loadHierarchy()">Refresh Global Hierarchy</button>
-    <div id="hierarchyContainer"></div>
+  <!-- MY RAW DATA + CREATE FORM -->
+  <div class="section" id="myRawDataSection" style="display:none;">
+    <h2>My Raw Data 
+      <span title="Local SITREPs, logs, or sensor feeds your team created." 
+            style="font-weight:bold; cursor:pointer;">[?]</span>
+    </h2>
+    <div id="myRawList"></div>
+
+    <h3>Add Raw Data</h3>
+    <p>
+      <label>Content:</label><br/>
+      <textarea id="newRawContent" rows="2" cols="50"></textarea><br/>
+      <label>Source Type:</label>
+      <input id="newRawType" type="text" value="sitrep"/>
+      <button onclick="createMyRawData()">Add Raw Data</button>
+      <span style="font-size:0.9em; color:#666;">
+        (This won't affect summaries until you click <strong>Regenerate Summaries</strong> 
+        above, optionally with a CCIR keyword.)
+      </span>
+    </p>
   </div>
 
-  <!-- NEW: Team-Focused Hierarchy -->
-  <div class="section">
-    <h2>Team-Focused Hierarchy</h2>
-    <label>Team ID:</label> 
-    <input id="focusTeamId" type="number" placeholder="e.g. 2"/>
-    <label>Include Sub-teams?</label> 
-    <input id="focusIncludeSubs" type="checkbox" checked/>
-    <button onclick="loadTeamHierarchy()">Load Team Hierarchy</button>
-    <div id="teamHierarchyContainer"></div>
+  <!-- MY SUMMARY -->
+  <div class="section" id="mySummarySection" style="display:none;">
+    <h2>My Summary (Bullet Points) 
+      <span title="These bullet points combine your raw data + subordinates' bullet points, filtered by CCIR if provided." 
+            style="font-weight:bold; cursor:pointer;">[?]</span>
+    </h2>
+    <div id="mySummaryContainer"></div>
   </div>
+
 
   <script>
-    const API_BASE = "http://localhost:8000";  // Adjust for your environment
+    const API_BASE = "http://localhost:8000";  // adjust as needed
 
-    async function createTeam() {
-      const teamName = document.getElementById("teamName").value;
-      const echelon = document.getElementById("teamEchelon").value;
-      const parent = document.getElementById("teamParent").value || null;
+    /* ============ ONBOARDING WIZARD HANDLERS ============ */
+    function showOnboarding() {
+      document.getElementById("onboardingOverlay").style.display = "flex";
+    }
+    function closeOnboarding() {
+      document.getElementById("onboardingOverlay").style.display = "none";
+    }
 
-      const payload = {
-        team_name: teamName,
-        echelon_level: echelon,
-        parent_team_id: parent ? parseInt(parent) : null
-      };
+    // Optional: auto-show the onboarding once
+    window.addEventListener("DOMContentLoaded", () => {
+      // Could check localStorage to see if user already closed it
+      // For now, let's just show it each time as a demo
+      showOnboarding();
+    });
+
+    /* ============ HELP SECTION TOGGLE ============ */
+    function toggleHelp() {
+      const helpSec = document.getElementById("helpSection");
+      if (helpSec.style.display === "none") {
+        helpSec.style.display = "block";
+      } else {
+        helpSec.style.display = "none";
+      }
+    }
+
+    /* ============ REGENERATE with CCIR ============ */
+    async function regenerateWithCCIR() {
+      const ccir = document.getElementById("ccirKeyword").value.trim();
+      let url = `${API_BASE}/summaries/regenerate`;
+      if (ccir) {
+        url += `?ccir=${encodeURIComponent(ccir)}`;
+      }
+      try {
+        let resp = await fetch(url, { method: 'POST' });
+        let data = await resp.json();
+        alert(JSON.stringify(data));
+      } catch (err) {
+        alert("Error regenerating summaries: " + err);
+      }
+    }
+
+    /* ============ LOAD TEAM PAGE & SECTIONS ============ */
+    async function loadTeamPage() {
+      let teamId = parseInt(document.getElementById("myTeamId").value);
+      if (!teamId) {
+        alert("Please enter a valid team ID.");
+        return;
+      }
+
+      // 1) load team info
+      let teamData = await fetchTeamInfo(teamId);
+      if (!teamData) return; // error
+      document.getElementById("teamInfoSection").style.display = "";
+      document.getElementById("teamNameLabel").textContent = teamData.team_name;
+      document.getElementById("teamEchelonLabel").textContent = teamData.echelon_level;
+      document.getElementById("teamParentLabel").textContent = teamData.parent_team_id || "None";
+
+      // show relevant sections
+      document.getElementById("subordinatesSection").style.display = "";
+      document.getElementById("myRawDataSection").style.display = "";
+      document.getElementById("mySummarySection").style.display = "";
+
+      // 2) load subordinates
+      await loadSubordinates(teamId);
+
+      // 3) load my raw data
+      await loadMyRawData(teamId);
+
+      // 4) load my summary bullet points
+      await loadMySummary(teamId);
+    }
+
+    async function fetchTeamInfo(teamId) {
+      try {
+        let resp = await fetch(`${API_BASE}/teams`);
+        let data = await resp.json();
+        let myTeam = data.find(t => t.team_id === teamId);
+        if (!myTeam) {
+          alert("Team not found in /teams list.");
+          return null;
+        }
+        return myTeam;
+      } catch (err) {
+        alert("Error fetching teams: " + err);
+        return null;
+      }
+    }
+
+    /* ============ LOAD SUBORDINATES ============ */
+    async function loadSubordinates(teamId) {
+      let container = document.getElementById("subordinatesContainer");
+      container.innerHTML = "Loading subordinates...";
 
       try {
-        let resp = await fetch(`${API_BASE}/teams`, {
+        let resp = await fetch(`${API_BASE}/teams`);
+        let data = await resp.json();
+        let byParent = {};
+        data.forEach(t => {
+          let pid = t.parent_team_id;
+          if (!byParent[pid]) byParent[pid] = [];
+          byParent[pid].push(t);
+        });
+
+        let subs = byParent[teamId] || [];
+        if (subs.length === 0) {
+          container.innerHTML = "<p>No direct subordinates.</p>";
+          return;
+        }
+
+        let html = "";
+        subs.forEach(st => {
+          html += `
+            <button class="collapsible" onclick="toggleCollapsible(this)">
+              ${st.team_name} (${st.team_id})
+            </button>
+            <div class="collapsible-content" id="subSummary_${st.team_id}">
+              Loading bullet points...
+            </div>
+          `;
+        });
+        container.innerHTML = html;
+
+        // now load bullet points for each subordinate
+        for (let st of subs) {
+          await loadTeamBulletPoints(st.team_id, `subSummary_${st.team_id}`);
+        }
+      } catch (err) {
+        container.innerHTML = "Error loading subordinates: " + err;
+      }
+    }
+
+    async function loadTeamBulletPoints(teamId, containerId) {
+      let div = document.getElementById(containerId);
+      div.innerHTML = "Loading...";
+
+      try {
+        let resp = await fetch(`${API_BASE}/hierarchy`);
+        let data = await resp.json(); // root bullet points
+        let relevantBPs = [];
+        function collectBPs(bp) {
+          if (bp.team_id === teamId) relevantBPs.push(bp);
+          if (bp.children) {
+            bp.children.forEach(c => collectBPs(c));
+          }
+        }
+        data.forEach(root => collectBPs(root));
+
+        if (relevantBPs.length === 0) {
+          div.innerHTML = "<p>No bullet points found for this subordinate.</p>";
+          return;
+        }
+
+        let outHtml = "";
+        relevantBPs.forEach(bp => {
+          outHtml += renderBulletPointHTML(bp);
+        });
+        div.innerHTML = outHtml;
+
+      } catch (err) {
+        div.innerHTML = "Error loading subordinate bullet points: " + err;
+      }
+    }
+
+    function renderBulletPointHTML(bp) {
+      let invalidClass = (bp.validity_status === "invalid") ? "invalid" : "";
+      return `
+        <div class="bullet-point ${invalidClass}" onclick="loadProvenance(${bp.bp_id}, event)">
+          <b>ID:</b> ${bp.bp_id} | 
+          <b>Status:</b> ${bp.validity_status} <br/>
+          <b>Fact:</b> ${bp.content}
+        </div>
+      `;
+    }
+
+    function toggleCollapsible(btn) {
+      btn.classList.toggle("active");
+      let content = btn.nextElementSibling;
+      if (content.style.display === "block") {
+        content.style.display = "none";
+      } else {
+        content.style.display = "block";
+      }
+    }
+
+    /* ============ LOAD MY RAW DATA ============ */
+    async function loadMyRawData(teamId) {
+      let sect = document.getElementById("myRawList");
+      sect.innerHTML = "Loading my raw data...";
+      try {
+        let resp = await fetch(`${API_BASE}/raw-data/${teamId}`);
+        let data = await resp.json();
+        if (data.length === 0) {
+          sect.innerHTML = "<p>No raw data for this team yet.</p>";
+          return;
+        }
+        let html = `<ul>`;
+        data.forEach(rd => {
+          html += `<li>Raw#${rd.raw_data_id}: ${rd.content} <em>(${rd.source_type})</em></li>`;
+        });
+        html += `</ul>`;
+        sect.innerHTML = html;
+      } catch (err) {
+        sect.innerHTML = "Error loading raw data: " + err;
+      }
+    }
+
+    async function createMyRawData() {
+      let teamId = parseInt(document.getElementById("myTeamId").value);
+      let content = document.getElementById("newRawContent").value;
+      let stype = document.getElementById("newRawType").value;
+      if (!teamId) {
+        alert("Team not loaded yet.");
+        return;
+      }
+      const payload = {
+        team_id: teamId,
+        content: content,
+        source_type: stype
+      };
+      try {
+        let resp = await fetch(`${API_BASE}/raw-data`, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         let data = await resp.json();
         alert(JSON.stringify(data));
-      } catch (err) {
-        alert("Error creating team: " + err);
-      }
-    }
-
-    async function createCCIR() {
-      const teamId = parseInt(document.getElementById("ccirTeamId").value);
-      const desc = document.getElementById("ccirDesc").value;
-      const kw = document.getElementById("ccirKeywords").value
-        ? document.getElementById("ccirKeywords").value.split(',').map(s => s.trim())
-        : [];
-
-      const payload = {
-        team_id: teamId,
-        description: desc,
-        keywords: kw
-      };
-      try {
-        let resp = await fetch(`${API_BASE}/ccirs`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
-        });
-        let data = await resp.json();
-        alert("CCIR created: " + JSON.stringify(data));
-      } catch (err) {
-        alert("Error creating CCIR: " + err);
-      }
-    }
-
-    async function createRaw() {
-      const teamId = parseInt(document.getElementById("rawTeamId").value);
-      const content = document.getElementById("rawContent").value;
-      const stype = document.getElementById("rawSourceType").value;
-
-      const payload = { team_id: teamId, content, source_type: stype };
-
-      try {
-        let resp = await fetch(`${API_BASE}/raw-data`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
-        });
-        let data = await resp.json();
-        alert("Created Raw Data: " + JSON.stringify(data));
+        // reload raw data display
+        await loadMyRawData(teamId);
       } catch (err) {
         alert("Error creating raw data: " + err);
       }
     }
 
-    async function createBulletPoint() {
-      const teamId = parseInt(document.getElementById("bpTeamId").value);
-      const echelon = document.getElementById("bpEchelon").value;
-      const content = document.getElementById("bpContent").value;
+    /* ============ LOAD MY SUMMARY ============ */
+    async function loadMySummary(teamId) {
+      let sect = document.getElementById("mySummaryContainer");
+      sect.innerHTML = "Loading my summary bullet points...";
 
-      const childBPsStr = document.getElementById("bpChildren").value;
-      let childBPs = childBPsStr
-        ? childBPsStr.split(',').map(x => parseInt(x.trim()))
-        : [];
-
-      const childRawsStr = document.getElementById("bpRawChildren").value;
-      let childRaws = childRawsStr
-        ? childRawsStr.split(',').map(x => parseInt(x.trim()))
-        : [];
-
-      const payload = {
-        team_id: teamId,
-        echelon_level: echelon,
-        content: content,
-        child_bps: childBPs,
-        child_raws: childRaws
-      };
-
-      try {
-        let resp = await fetch(`${API_BASE}/bullet-points`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
-        });
-        let data = await resp.json();
-        alert("Created Bullet Point: " + JSON.stringify(data));
-      } catch (err) {
-        alert("Error creating bullet point: " + err);
-      }
-    }
-
-    async function linkPoints() {
-      const parent = parseInt(document.getElementById("linkParentId").value);
-      const child = parseInt(document.getElementById("linkChildId").value);
-
-      if (!parent || !child) {
-        alert("Invalid parent/child IDs");
-        return;
-      }
-
-      try {
-        let resp = await fetch(`${API_BASE}/bullet-points/link`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ parent_id: parent, child_id: child })
-        });
-        let data = await resp.json();
-        alert(JSON.stringify(data));
-      } catch (err) {
-        alert("Error linking points: " + err);
-      }
-    }
-
-    async function invalidateBP() {
-      const bpId = parseInt(document.getElementById("invBpId").value);
-      if (!bpId) {
-        alert("Invalid bullet point ID");
-        return;
-      }
-
-      try {
-        let resp = await fetch(`${API_BASE}/bullet-points/invalidate/${bpId}`, {
-          method: 'POST'
-        });
-        let data = await resp.json();
-        alert(JSON.stringify(data));
-      } catch (err) {
-        alert("Error invalidating bullet point: " + err);
-      }
-    }
-
-    // === GLOBAL HIERARCHY =====================================================
-    async function loadHierarchy() {
-      const container = document.getElementById("hierarchyContainer");
-      container.innerHTML = "Loading...";
       try {
         let resp = await fetch(`${API_BASE}/hierarchy`);
         let data = await resp.json();
-        container.innerHTML = "";
-        data.forEach(rootBP => {
-          container.appendChild(renderBP(rootBP));
+
+        let relevantBPs = [];
+        function findTeamBPs(bp) {
+          if (bp.team_id === teamId) relevantBPs.push(bp);
+          if (bp.children) {
+            bp.children.forEach(c => findTeamBPs(c));
+          }
+        }
+        data.forEach(r => findTeamBPs(r));
+
+        if (relevantBPs.length === 0) {
+          sect.innerHTML = "<p>No bullet points found for this team.</p>";
+          return;
+        }
+
+        let outHtml = "";
+        relevantBPs.forEach(bp => {
+          outHtml += renderBulletPointHTML(bp);
         });
+        sect.innerHTML = outHtml;
+
       } catch (err) {
-        container.innerHTML = "Error loading hierarchy: " + err;
+        sect.innerHTML = "Error loading summary: " + err;
       }
     }
 
-    // === TEAM-FOCUSED HIERARCHY ==============================================
-    async function loadTeamHierarchy() {
-      const container = document.getElementById("teamHierarchyContainer");
-      container.innerHTML = "Loading...";
-      const teamId = parseInt(document.getElementById("focusTeamId").value);
-      const includeSubs = document.getElementById("focusIncludeSubs").checked;
-
-      if (!teamId) {
-        container.innerHTML = "Please specify a valid Team ID.";
-        return;
-      }
-
-      // GET /bullet-points/team/{team_id}/hierarchy?include_subteams=...
-      const url = `${API_BASE}/bullet-points/team/${teamId}/hierarchy?include_subteams=${includeSubs}`;
-
+    /* ============ PROVENANCE ============ */
+    async function loadProvenance(bpId, event) {
+      event.stopPropagation();
       try {
-        let resp = await fetch(url);
+        let resp = await fetch(`${API_BASE}/bullet-points/${bpId}`);
         let data = await resp.json();
-        container.innerHTML = "";
-        data.forEach(rootBP => {
-          container.appendChild(renderBP(rootBP));
-        });
+        let lines = [
+          `Bullet Point #${data.bp_id}`,
+          `Team: ${data.team_id}`,
+          `Content: ${data.content}`,
+          `Status: ${data.validity_status}`,
+          `Created At: ${data.created_at}`,
+          `Child BPs: ${data.child_bullet_points.join(", ")}`,
+          `Child Raw: ${data.child_raw_data.join(", ")}`
+        ];
+        alert(lines.join("\n"));
       } catch (err) {
-        container.innerHTML = "Error loading team hierarchy: " + err;
+        alert("Error fetching provenance: " + err);
       }
-    }
-
-    // === Render a bullet point (recursively) =================================
-    function renderBP(bp) {
-      const wrapper = document.createElement("div");
-      wrapper.classList.add("bullet-point");
-      if (bp.validity_status === "invalid") {
-        wrapper.classList.add("invalid");
-      }
-      wrapper.innerHTML = `
-        <div>
-          <b>ID:</b> ${bp.bp_id} |
-          <b>Team:</b> ${bp.team_id} |
-          <b>Echelon:</b> ${bp.echelon_level} |
-          <b>Status:</b> ${bp.validity_status}
-        </div>
-        <div><b>Content:</b> ${bp.content}</div>
-      `;
-
-      if (bp.children && bp.children.length > 0) {
-        bp.children.forEach(child => {
-          wrapper.appendChild(renderBP(child));
-        });
-      }
-      return wrapper;
     }
   </script>
-
 </body>
 </html>

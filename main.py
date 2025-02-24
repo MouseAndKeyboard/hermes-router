@@ -1,13 +1,10 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 import os
 import psycopg2
 
-###############################################################################
-# Database Connection
-###############################################################################
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_NAME = os.getenv("DB_NAME", "mvp_db")
 DB_USER = os.getenv("DB_USER", "postgres")
@@ -23,161 +20,88 @@ conn = psycopg2.connect(
 )
 conn.autocommit = True
 
-###############################################################################
-# FastAPI Setup
-###############################################################################
-app = FastAPI(title="Bullet Point Hierarchy MVP", version="3.0")
+app = FastAPI(title="Auto Summaries with CCIR & Data Provenance", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For local dev, open to all. Restrict in production.
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
 )
 
-###############################################################################
-# Pydantic Models
-###############################################################################
 class TeamCreate(BaseModel):
     team_name: str
     echelon_level: str
     parent_team_id: Optional[int] = None
-
-class CCIRCreate(BaseModel):
-    team_id: int
-    description: str
-    keywords: Optional[List[str]] = []
-    active: bool = True
 
 class CreateRawData(BaseModel):
     team_id: int
     content: str
     source_type: Optional[str] = "sitrep"
 
-class CreateBulletPoint(BaseModel):
-    team_id: int
-    echelon_level: str
-    content: str
-    child_bps: Optional[List[int]] = []    # IDs of bullet points used
-    child_raws: Optional[List[int]] = []   # IDs of raw_data used
+@app.get("/")
+def root():
+    return {"message": "Auto Summaries with CCIR. Use /summaries/regenerate to rebuild bullet points."}
 
-class LinkPointsRequest(BaseModel):
-    parent_id: int
-    child_id: int
+# ----------------------------------------------------------------------------
+# HELPER FUNCTIONS
+# ----------------------------------------------------------------------------
+def team_exists(team_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM teams WHERE team_id=%s", (team_id,))
+        return bool(cur.fetchone())
 
-###############################################################################
-# TEAM Endpoints
-###############################################################################
+def get_child_teams_map():
+    """
+    Return a dict of parent_team_id -> list of child_team_ids
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT team_id, parent_team_id FROM teams")
+        rows = cur.fetchall()
+    child_map = {}
+    for (tid, pid) in rows:
+        if pid not in child_map:
+            child_map[pid] = []
+        child_map[pid].append(tid)
+    return child_map
+
+def get_descendants(root_team_id: int, child_map) -> list:
+    """
+    BFS or DFS to get all descendants of root_team_id, including root.
+    """
+    stack = [root_team_id]
+    visited = []
+    while stack:
+        current = stack.pop()
+        visited.append(current)
+        if current in child_map:
+            stack.extend(child_map[current])
+    return visited
+
+# ----------------------------------------------------------------------------
+# TEAMS
+# ----------------------------------------------------------------------------
 @app.post("/teams")
-def create_team(team: TeamCreate):
+def create_team(t: TeamCreate):
     """
-    Create a new team with optional parent_team_id.
+    Create a new team. 
     """
+    if t.parent_team_id and not team_exists(t.parent_team_id):
+        raise HTTPException(status_code=404, detail="Parent team not found")
+
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO teams (team_name, echelon_level, parent_team_id)
             VALUES (%s, %s, %s)
             RETURNING team_id
-        """, (team.team_name, team.echelon_level, team.parent_team_id))
+        """, (t.team_name, t.echelon_level, t.parent_team_id))
         new_id = cur.fetchone()[0]
+
     return {"team_id": new_id, "message": "Team created"}
-
-
-def get_descendant_team_ids(root_team_id: int) -> List[int]:
-    with conn.cursor() as cur:
-        cur.execute("SELECT team_id, parent_team_id FROM teams")
-        rows = cur.fetchall()
-    children_map = {}
-    for (tid, pid) in rows:
-        if pid not in children_map:
-            children_map[pid] = []
-        children_map[pid].append(tid)
-
-    visited = []
-    stack = [root_team_id]
-    while stack:
-        current = stack.pop()
-        visited.append(current)
-        if current in children_map:
-            stack.extend(children_map[current])
-    return visited
-
-
-
-@app.get("/bullet-points/team/{team_id}/hierarchy")
-def get_team_hierarchy(team_id: int, include_subteams: bool = True):
-    """
-    Build a nested bullet-point hierarchy for the given team, 
-    plus any descendants if 'include_subteams=true'.
-    Excludes any bullet points from sibling or parent teams.
-    """
-
-    # Step 1: Gather set of valid team_ids (team_id + descendants if requested).
-    team_ids = [team_id]
-    if include_subteams:
-        team_ids = get_descendant_team_ids(team_id)  # your helper that does BFS/DFS to find children
-    
-    # Step 2: Fetch bullet points belonging to those teams
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT bp_id, team_id, echelon_level, content, validity_status
-            FROM bullet_points
-            WHERE team_id = ANY(%s)
-        """, (team_ids,))
-        rows = cur.fetchall()
-    
-    # Build a map of bullet_point_id -> details
-    bp_map = {}
-    for r in rows:
-        (bid, tid, lvl, content, status) = r
-        bp_map[bid] = {
-            "bp_id": bid,
-            "team_id": tid,
-            "echelon_level": lvl,
-            "content": content,
-            "validity_status": status,
-            "children": []
-        }
-    
-    # Step 3: Fetch parent->child links, but only keep ones 
-    # where both parent and child belong to the 'team_ids' set of bullet points
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT parent_bp_id, child_bp_id 
-            FROM bullet_point_sources
-        """)
-        rels = cur.fetchall()
-    
-    # We'll keep only relationships where both parent and child are in bp_map
-    all_children = set()
-    for (parent, child) in rels:
-        if parent in bp_map and child in bp_map:
-            bp_map[parent]["children"].append(child)
-            all_children.add(child)
-    
-    # Step 4: Identify "root" bullet points in this set 
-    # (i.e., bullet points that are never a child in the filtered set)
-    all_bids = set(bp_map.keys())
-    root_ids = all_bids - all_children
-    
-    # Step 5: Build the nested structure
-    def build_tree(bp_dict):
-        new_children = []
-        for c_id in bp_dict["children"]:
-            new_children.append(build_tree(bp_map[c_id]))
-        bp_dict["children"] = new_children
-        return bp_dict
-    
-    hierarchy = [build_tree(bp_map[r]) for r in sorted(root_ids)]
-    return hierarchy
-
 
 @app.get("/teams")
 def list_teams():
-    """
-    Return all teams (flat list).
-    """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT team_id, team_name, echelon_level, parent_team_id
@@ -185,6 +109,7 @@ def list_teams():
             ORDER BY team_id
         """)
         rows = cur.fetchall()
+
     result = []
     for r in rows:
         result.append({
@@ -195,409 +120,314 @@ def list_teams():
         })
     return result
 
-@app.get("/teams/{team_id}/subtree")
-def get_team_subtree(team_id: int):
-    """
-    Return the specified team plus all of its descendant teams in a nested structure.
-    """
-
-    # Build up a map: team_id -> (team_name, echelon_level, parent_team_id, children=[])
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT team_id, team_name, echelon_level, parent_team_id
-            FROM teams
-        """)
-        rows = cur.fetchall()
-
-    team_map = {}
-    for row in rows:
-        tid, tname, lvl, pid = row
-        team_map[tid] = {
-            "team_id": tid,
-            "team_name": tname,
-            "echelon_level": lvl,
-            "parent_team_id": pid,
-            "children": []
-        }
-
-    # Fill children
-    for t in team_map.values():
-        pid = t["parent_team_id"]
-        if pid and pid in team_map:
-            team_map[pid]["children"].append(t["team_id"])
-
-    # Identify the subtree from the requested team_id downward
-    if team_id not in team_map:
-        raise HTTPException(status_code=404, detail="Team not found")
-
-    def build_subtree(tid):
-        node = team_map[tid]
-        children = node["children"]
-        child_objs = [build_subtree(c) for c in children]
-        return {
-            "team_id": tid,
-            "team_name": node["team_name"],
-            "echelon_level": node["echelon_level"],
-            "parent_team_id": node["parent_team_id"],
-            "children": child_objs
-        }
-
-    return build_subtree(team_id)
-
-###############################################################################
-# CCIR Endpoints
-###############################################################################
-@app.post("/ccirs")
-def create_ccir(ccir: CCIRCreate):
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO ccirs (team_id, description, keywords, active)
-            VALUES (%s, %s, %s, %s)
-            RETURNING ccir_id
-        """, (ccir.team_id, ccir.description, ccir.keywords, ccir.active))
-        new_id = cur.fetchone()[0]
-    return {"ccir_id": new_id, "message": "CCIR created"}
-
-@app.get("/ccirs/{team_id}")
-def get_ccirs_for_team(team_id: int):
-    """
-    Return all active CCIRs for a given team.
-    """
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT ccir_id, description, keywords, active
-            FROM ccirs
-            WHERE team_id = %s
-            ORDER BY ccir_id
-        """, (team_id,))
-        rows = cur.fetchall()
-    return [
-        {
-            "ccir_id": r[0],
-            "description": r[1],
-            "keywords": r[2],
-            "active": r[3]
-        }
-        for r in rows
-    ]
-
-###############################################################################
-# RAW DATA Endpoints
-###############################################################################
+# ----------------------------------------------------------------------------
+# RAW DATA
+# ----------------------------------------------------------------------------
 @app.post("/raw-data")
-def create_raw(item: CreateRawData):
+def create_raw_data(item: CreateRawData):
     """
-    Store raw SITREP (or other) text for a given team, return raw_data_id.
+    Insert raw data for a team. Summaries are not auto-updated here.
+    We'll rely on the user to call /summaries/regenerate afterward 
+    (or you can automatically do it here if desired).
     """
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT team_id FROM teams WHERE team_id = %s
-        """, (item.team_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Team not found")
+    if not team_exists(item.team_id):
+        raise HTTPException(status_code=404, detail="Team not found")
 
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO raw_data (team_id, content, source_type)
-            VALUES (%s, %s, %s) RETURNING raw_data_id
+            VALUES (%s, %s, %s)
+            RETURNING raw_data_id
         """, (item.team_id, item.content, item.source_type))
-        raw_id = cur.fetchone()[0]
-    return {"raw_data_id": raw_id, "message": "Raw data created"}
+        new_id = cur.fetchone()[0]
+
+    return {"raw_data_id": new_id, "message": "Raw data created. Run /summaries/regenerate to update bullet points."}
 
 @app.get("/raw-data/{team_id}")
-def get_raw_for_team(team_id: int):
-    """
-    Return raw_data belonging to the given team (not including sub-teams).
-    You can expand this with a recursive lookup if needed.
-    """
+def list_raw_data_for_team(team_id: int):
+    if not team_exists(team_id):
+        raise HTTPException(status_code=404, detail="Team not found")
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT raw_data_id, content, source_type, created_at
             FROM raw_data
-            WHERE team_id = %s
+            WHERE team_id=%s
             ORDER BY raw_data_id
         """, (team_id,))
         rows = cur.fetchall()
 
-    result = []
-    for r in rows:
-        result.append({
+    return [
+        {
             "raw_data_id": r[0],
             "content": r[1],
             "source_type": r[2],
             "created_at": r[3]
-        })
-    return result
+        }
+        for r in rows
+    ]
 
-###############################################################################
-# BULLET POINT Endpoints
-###############################################################################
-@app.post("/bullet-points")
-def create_bullet_point(bp: CreateBulletPoint):
+# ----------------------------------------------------------------------------
+# SUMMARIES (BULLET POINTS) - Regenerate All
+# ----------------------------------------------------------------------------
+
+@app.post("/summaries/regenerate")
+def regenerate_all_summaries(ccir: Optional[str] = None):
     """
-    Create a new bullet point for the specified team.
-    child_bps = array of bullet point IDs that feed into this
-    child_raws = array of raw_data IDs that feed into this
+    Rebuild bullet points from scratch for all teams, bottom-up.
+    If ccir is provided (a simple string), only bullet points or raw data containing
+    that string (case-insensitive) are included in the new summaries.
+    1) Delete all bullet_points, bullet_point_sources, bullet_point_raw_refs.
+    2) For each team in ascending order (i.e. from bottom up),
+       gather subordinate bullet points + local raw data that match 'ccir' (if any).
+       Create bullet points referencing them.
     """
+    # 1) Clear all bullet points
     with conn.cursor() as cur:
-        # Verify the team
-        cur.execute("SELECT team_id FROM teams WHERE team_id=%s", (bp.team_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Team not found")
+        cur.execute("DELETE FROM bullet_point_raw_refs")
+        cur.execute("DELETE FROM bullet_point_sources")
+        cur.execute("DELETE FROM bullet_points")
 
-        # Insert the new bullet point
+    # Build child_teams map so we can find "leaf" teams easily
+    child_map = get_child_teams_map()
+
+    # We'll produce an ordering that ensures children are processed before parents
+    # If a team has no children, it's a leaf => process first.
+    # We'll do a topological sort. For simplicity, we can repeatedly pick teams 
+    # that haven't been processed and have no unprocessed children.
+
+    # Gather all team_ids
+    with conn.cursor() as cur:
+        cur.execute("SELECT team_id FROM teams")
+        all_teams = [row[0] for row in cur.fetchall()]
+
+    processed = set()
+    results = []
+    # We'll keep looping until we've processed all teams
+    while len(processed) < len(all_teams):
+        any_progress = False
+        for t_id in all_teams:
+            if t_id in processed:
+                continue
+            # see if all children are processed
+            children = child_map.get(t_id, [])
+            if all(c in processed for c in children):
+                # we can process t_id now
+                build_summary_for_team(t_id, ccir)
+                processed.add(t_id)
+                any_progress = True
+        if not any_progress:
+            # we have a cycle or something weird - shouldn't happen in a tree
+            raise HTTPException(status_code=500, detail="Team hierarchy cycle detected?")
+
+    return {"message": "All summaries regenerated", "ccir_filter": ccir}
+
+
+def build_summary_for_team(team_id: int, ccir: Optional[str]):
+    """
+    Create new bullet points for a single team, referencing child bullet points 
+    and local raw data that match 'ccir'.
+    Each "fact" = 1 bullet point.
+    """
+    ccir_lc = ccir.lower() if ccir else None
+
+    # 1) Gather child bullet points that match ccir
+    #    i.e. bullet points from direct children
+    child_map = get_child_teams_map()
+    children = child_map.get(team_id, [])
+
+    # We'll read all bullet points from the child teams
+    child_bps = []
+    with conn.cursor() as cur:
+        if children:
+            cur.execute(f"""
+                SELECT bp_id, content
+                FROM bullet_points
+                WHERE team_id = ANY(%s)
+            """, (children,))
+            child_bps = cur.fetchall()  # list of (bp_id, content)
+
+    # Filter by CCIR if needed
+    if ccir_lc:
+        child_bps = [ (bid, c) for (bid, c) in child_bps if ccir_lc in c.lower() ]
+
+    # 2) Gather local raw data for this team
+    with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO bullet_points (team_id, echelon_level, content)
-            VALUES (%s, %s, %s)
-            RETURNING bp_id
-        """, (bp.team_id, bp.echelon_level, bp.content))
-        new_bp_id = cur.fetchone()[0]
+            SELECT raw_data_id, content
+            FROM raw_data
+            WHERE team_id=%s
+        """, (team_id,))
+        local_rds = cur.fetchall()  # list of (raw_data_id, content)
 
-        # Link child bullet points
-        for child_id in bp.child_bps:
-            # confirm child bullet point exists
-            cur.execute("SELECT bp_id FROM bullet_points WHERE bp_id=%s", (child_id,))
-            if not cur.fetchone():
-                raise HTTPException(status_code=404, detail=f"Child bullet point {child_id} not found")
+    # Filter local raw data by CCIR if needed
+    if ccir_lc:
+        local_rds = [ (rid, c) for (rid, c) in local_rds if ccir_lc in c.lower() ]
 
+    # 3) Now create bullet points for each subordinate bullet point or raw data
+    #    Each "fact" is one new bullet point referencing that source.
+    #    This approach might produce multiple bullet points for this team.
+
+    with conn.cursor() as cur:
+        # For each child bullet point
+        for (child_bp_id, child_content) in child_bps:
+            # Insert a bullet point referencing that child
+            cur.execute("""
+                INSERT INTO bullet_points (team_id, content)
+                VALUES (%s, %s)
+                RETURNING bp_id
+            """, (team_id, child_content))
+            new_bp_id = cur.fetchone()[0]
+
+            # Link to the child bullet point
             cur.execute("""
                 INSERT INTO bullet_point_sources (parent_bp_id, child_bp_id)
                 VALUES (%s, %s)
-            """, (new_bp_id, child_id))
+            """, (new_bp_id, child_bp_id))
 
-        # Link raw_data
-        for raw_id in bp.child_raws:
-            # confirm raw_data exists
-            cur.execute("SELECT raw_data_id FROM raw_data WHERE raw_data_id=%s", (raw_id,))
-            if not cur.fetchone():
-                raise HTTPException(status_code=404, detail=f"Raw data {raw_id} not found")
-
+        # For each local raw data
+        for (rd_id, rd_content) in local_rds:
             cur.execute("""
-                INSERT INTO bullet_point_raw_refs (bp_id, raw_data_id, source_type)
-                VALUES (%s, %s, %s)
-            """, (new_bp_id, raw_id, "raw_source"))
+                INSERT INTO bullet_points (team_id, content)
+                VALUES (%s, %s)
+                RETURNING bp_id
+            """, (team_id, rd_content))
+            new_bp_id = cur.fetchone()[0]
 
-    return {"bp_id": new_bp_id, "message": "Bullet point created"}
+            # Link to raw_data
+            cur.execute("""
+                INSERT INTO bullet_point_raw_refs (bp_id, raw_data_id)
+                VALUES (%s, %s)
+            """, (new_bp_id, rd_id))
 
-@app.get("/bullet-points/{bp_id}")
-def get_bullet_point(bp_id: int):
-    """
-    Return bullet point data (including child IDs).
-    """
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT bp_id, team_id, echelon_level, content, validity_status, created_at
-            FROM bullet_points
-            WHERE bp_id = %s
-        """, (bp_id,))
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Bullet point not found")
 
-        cur.execute("""
-            SELECT child_bp_id
-            FROM bullet_point_sources
-            WHERE parent_bp_id = %s
-        """, (bp_id,))
-        child_ids = [r[0] for r in cur.fetchall()]
-
-        # also fetch raw_data references
-        cur.execute("""
-            SELECT raw_data_id
-            FROM bullet_point_raw_refs
-            WHERE bp_id = %s
-        """, (bp_id,))
-        raw_refs = [r[0] for r in cur.fetchall()]
-
-    return {
-        "bp_id": row[0],
-        "team_id": row[1],
-        "echelon_level": row[2],
-        "content": row[3],
-        "validity_status": row[4],
-        "created_at": row[5],
-        "child_bullet_points": child_ids,
-        "child_raw_data_ids": raw_refs
-    }
-
-@app.post("/bullet-points/link")
-def link_bullet_points(link_req: LinkPointsRequest):
-    """
-    Link child bullet point to a parent bullet point for hierarchy.
-    """
-    parent_id = link_req.parent_id
-    child_id = link_req.child_id
-
-    with conn.cursor() as cur:
-        # Validate existence
-        cur.execute("SELECT bp_id FROM bullet_points WHERE bp_id = %s", (parent_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Parent bullet point not found")
-
-        cur.execute("SELECT bp_id FROM bullet_points WHERE bp_id = %s", (child_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Child bullet point not found")
-
-        cur.execute("""
-            INSERT INTO bullet_point_sources (parent_bp_id, child_bp_id)
-            VALUES (%s, %s)
-        """, (parent_id, child_id))
-
-    return {"msg": f"Linked bullet point {child_id} as a child of {parent_id}"}
-
-@app.post("/bullet-points/invalidate/{bp_id}")
-def invalidate_bullet_point(bp_id: int):
-    """
-    Mark a bullet point invalid, recursively invalidating its parent bullet points.
-    """
-    def recurse_invalidate(bid: int):
-        with conn.cursor() as c2:
-            c2.execute("""
-                UPDATE bullet_points
-                SET validity_status = 'invalid'
-                WHERE bp_id = %s
-            """, (bid,))
-        # find parents
-        with conn.cursor() as c3:
-            c3.execute("SELECT parent_bp_id FROM bullet_point_sources WHERE child_bp_id = %s", (bid,))
-            parents = c3.fetchall()
-        for p in parents:
-            recurse_invalidate(p[0])
-
-    # check if exists
-    with conn.cursor() as cur:
-        cur.execute("SELECT bp_id FROM bullet_points WHERE bp_id=%s", (bp_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Bullet point not found")
-
-    # do recursive invalidation
-    recurse_invalidate(bp_id)
-    return {"msg": f"Bullet point {bp_id} (and ancestors) invalidated."}
-
-###############################################################################
-# HIERARCHY Endpoint
-###############################################################################
+# ----------------------------------------------------------------------------
+# HIERARCHY VIEW
+# ----------------------------------------------------------------------------
 @app.get("/hierarchy")
-def get_hierarchy():
+def get_bullet_point_hierarchy():
     """
-    Return all bullet points in a nested tree. 
-    The 'root' bullet points are those that have no parent.
+    Return all bullet points in a nested tree, 
+    with children = bullet points from bullet_point_sources.
     """
+    # gather bullet points
     bp_map = {}
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT bp_id, team_id, echelon_level, content, validity_status
+            SELECT bp_id, team_id, content, validity_status
             FROM bullet_points
         """)
         rows = cur.fetchall()
-        for r in rows:
-            bid, tid, lvl, content, status = r
+        for (bid, tid, content, status) in rows:
             bp_map[bid] = {
                 "bp_id": bid,
                 "team_id": tid,
-                "echelon_level": lvl,
                 "content": content,
                 "validity_status": status,
                 "children": []
             }
 
-    # fill child lists
+    # gather links
     with conn.cursor() as cur:
         cur.execute("SELECT parent_bp_id, child_bp_id FROM bullet_point_sources")
         rels = cur.fetchall()
-        all_children = set()
-        for (parent, child) in rels:
-            all_children.add(child)
-            bp_map[parent]["children"].append(child)
 
-    # roots = all bullet points that are never a child
+    all_children = set()
+    for (p, c) in rels:
+        if p in bp_map and c in bp_map:
+            bp_map[p]["children"].append(c)
+            all_children.add(c)
+
+    # roots = bullet points that are not a child
     all_bids = set(bp_map.keys())
     root_ids = all_bids - all_children
 
-    # recursively build
-    def build_tree(bp_dict):
-        new_children = []
-        for c_id in bp_dict["children"]:
-            new_children.append(build_tree(bp_map[c_id]))
-        bp_dict["children"] = new_children
-        return bp_dict
-
-    hierarchy = [build_tree(bp_map[r]) for r in sorted(root_ids)]
-    return hierarchy
-
-###############################################################################
-# Bullet Points by Team (including sub-teams)
-###############################################################################
-@app.get("/bullet-points/team/{team_id}")
-def get_bullet_points_for_team(team_id: int, include_subteams: bool = False):
-    """
-    Return bullet points for a given team. 
-    If include_subteams=true, also gather bullet points from descendant teams.
-    """
-    # Validate existence
-    with conn.cursor() as cur:
-        cur.execute("SELECT team_id FROM teams WHERE team_id=%s", (team_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Team not found")
-
-    team_ids = [team_id]
-    if include_subteams:
-        # fetch subtree
-        # For simplicity, do a quick BFS/DFS in Python, or do a recursive CTE in SQL.
-        team_ids = get_descendant_team_ids(team_id)
-
-    # get bullet points
-    with conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT bp_id, team_id, echelon_level, content, validity_status, created_at
-            FROM bullet_points
-            WHERE team_id IN %s
-            ORDER BY bp_id
-        """, (tuple(team_ids),))
-        rows = cur.fetchall()
+    def build_tree(bid):
+        node = bp_map[bid]
+        child_objs = []
+        for cid in node["children"]:
+            child_objs.append(build_tree(cid))
+        node["children"] = child_objs
+        return node
 
     result = []
-    for r in rows:
-        result.append({
-            "bp_id": r[0],
-            "team_id": r[1],
-            "echelon_level": r[2],
-            "content": r[3],
-            "validity_status": r[4],
-            "created_at": r[5]
-        })
+    for r in sorted(root_ids):
+        result.append(build_tree(r))
     return result
 
-def get_descendant_team_ids(root_team_id: int) -> List[int]:
+# ----------------------------------------------------------------------------
+# Additional: bullet point details (for provenance)
+# ----------------------------------------------------------------------------
+@app.get("/bullet-points/{bp_id}")
+def get_bullet_point_details(bp_id: int):
     """
-    Simple function to get all descendant team IDs (including the root).
+    Return bullet point details + references to child bullet points or raw data 
+    so you can see provenance easily.
     """
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT team_id, parent_team_id FROM teams
-        """)
-        rows = cur.fetchall()
+            SELECT bp_id, team_id, content, validity_status, created_at
+            FROM bullet_points
+            WHERE bp_id=%s
+        """, (bp_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Bullet point not found")
+        (bid, tid, content, status, ts) = row
 
-    # build adjacency list
-    children_map = {}
-    for (tid, pid) in rows:
-        if pid not in children_map:
-            children_map[pid] = []
-        children_map[pid].append(tid)
+        # child bullet points
+        cur.execute("""
+            SELECT child_bp_id
+            FROM bullet_point_sources
+            WHERE parent_bp_id=%s
+        """, (bp_id,))
+        child_bps = [r[0] for r in cur.fetchall()]
 
-    result = []
-    def dfs(tid):
-        result.append(tid)
-        if tid in children_map:
-            for c in children_map[tid]:
-                dfs(c)
+        # raw references
+        cur.execute("""
+            SELECT raw_data_id
+            FROM bullet_point_raw_refs
+            WHERE bp_id=%s
+        """, (bp_id,))
+        raw_refs = [r[0] for r in cur.fetchall()]
 
-    dfs(root_team_id)
-    return result
+    return {
+        "bp_id": bid,
+        "team_id": tid,
+        "content": content,
+        "validity_status": status,
+        "created_at": ts,
+        "child_bullet_points": child_bps,
+        "child_raw_data": raw_refs
+    }
 
-###############################################################################
-# Root Endpoint
-###############################################################################
-@app.get("/")
-def read_root():
-    return {"message": "Bullet Point MVP with Teams and CCIR - version 3.0"}
+
+# ----------------------------------------------------------------------------
+# INVALIDATION (Optional)
+# ----------------------------------------------------------------------------
+@app.post("/bullet-points/invalidate/{bp_id}")
+def invalidate_bullet_point(bp_id: int):
+    """
+    Mark a bullet point invalid, recursively marking its parents invalid.
+    """
+    def recurse_invalidate(bid: int):
+        with conn.cursor() as c1:
+            c1.execute("""
+                UPDATE bullet_points
+                SET validity_status='invalid'
+                WHERE bp_id=%s
+            """, (bid,))
+            # find parents
+            c1.execute("SELECT parent_bp_id FROM bullet_point_sources WHERE child_bp_id=%s", (bid,))
+            parents = c1.fetchall()
+        for (pbid,) in parents:
+            recurse_invalidate(pbid)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT bp_id FROM bullet_points WHERE bp_id=%s", (bp_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Bullet point not found")
+
+    recurse_invalidate(bp_id)
+    return {"message": f"Bullet point {bp_id} invalidated (and parents as well)."}
+
