@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Bullet Point MVP (Enhanced)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2em;
+    }
+    .bullet-point {
+      margin-left: 20px; 
+      border-left: 2px solid #ccc;
+      padding-left: 10px;
+    }
+    .invalid {
+      color: red;
+      font-weight: bold;
+    }
+    .toggle-children {
+      cursor: pointer;
+      color: blue;
+      margin-left: 10px;
+    }
+    .children-container {
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Bullet Point Summaries (Enhanced MVP)</h1>
+
+  <div>
+    <h2>Create SITREP</h2>
+    <textarea id="sitrep" rows="4" cols="50"></textarea><br/>
+    <label>Echelon: </label>
+    <input id="sitrepEchelon" type="text" value="Platoon" /><br/>
+    <button onclick="submitSITREP()">Submit SITREP</button>
+  </div>
+  <hr/>
+
+  <div>
+    <h2>Link Bullet Points (Parent -> Child)</h2>
+    <label>Parent BP ID: </label><input id="parentId" type="number"/><br/>
+    <label>Child BP ID: </label><input id="childId" type="number"/><br/>
+    <button onclick="linkPoints()">Link Child</button>
+  </div>
+  <hr/>
+
+  <h2>All Bullet Points (Hierarchy View)</h2>
+  <button onclick="refreshHierarchy()">Refresh Hierarchy</button>
+  <div id="hierarchyContainer"></div>
+
+  <script>
+    const API_BASE = "http://localhost:8000";  // Adjust to your backend address
+
+    // Load entire tree once the page is loaded
+    window.addEventListener("DOMContentLoaded", () => {
+      refreshHierarchy();
+    });
+
+    // Submit SITREP => create bullet point
+    async function submitSITREP() {
+      const content = document.getElementById("sitrep").value;
+      const echelon = document.getElementById("sitrepEchelon").value || "Platoon";
+      const payload = { content, echelon_level: echelon };
+
+      try {
+        const resp = await fetch(`${API_BASE}/raw-data`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (data.bullet_point_id) {
+          alert(`Created bullet point ID: ${data.bullet_point_id}\nSummary: ${data.summary_content}`);
+          document.getElementById("sitrep").value = "";
+          // Reload the hierarchy so we see the new bullet point
+          refreshHierarchy();
+        } else {
+          alert("Error: " + JSON.stringify(data));
+        }
+      } catch (err) {
+        alert("Error creating SITREP: " + err);
+      }
+    }
+
+    // Link bullet points
+    async function linkPoints() {
+      let parentId = parseInt(document.getElementById("parentId").value);
+      let childId = parseInt(document.getElementById("childId").value);
+
+      if (!parentId || !childId) {
+        alert("Please enter valid parent and child IDs.");
+        return;
+      }
+
+      try {
+        let resp = await fetch(`${API_BASE}/bullet-points/link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ parent_id: parentId, child_id: childId })
+        });
+        let data = await resp.json();
+        if (data.msg) {
+          alert(data.msg);
+          refreshHierarchy();
+        } else if (data.detail) {
+          alert("Error: " + data.detail);
+        }
+      } catch (err) {
+        alert("Error linking bullet points: " + err);
+      }
+    }
+
+    // Fetch entire hierarchy
+    async function refreshHierarchy() {
+      try {
+        let resp = await fetch(`${API_BASE}/bullet-points/hierarchy`);
+        let data = await resp.json();
+        // data is an array of "root" bullet points, each with nested children
+        renderHierarchy(data);
+      } catch (err) {
+        alert("Error fetching hierarchy: " + err);
+      }
+    }
+
+    // Render the entire tree
+    function renderHierarchy(roots) {
+      const container = document.getElementById("hierarchyContainer");
+      container.innerHTML = ""; // Clear old tree
+
+      if (!roots.length) {
+        container.innerHTML = "<p>No bullet points found.</p>";
+        return;
+      }
+
+      roots.forEach(rootBP => {
+        const bpElement = createBPElement(rootBP);
+        container.appendChild(bpElement);
+      });
+    }
+
+    // Create an HTML element for a bullet point (and recursively for its children)
+    function createBPElement(bp) {
+      const wrapper = document.createElement("div");
+      wrapper.classList.add("bullet-point");
+
+      // Title row
+      const title = document.createElement("div");
+      let statusClass = (bp.validity_status === "invalid") ? "invalid" : "";
+      title.innerHTML = `
+        <span class="${statusClass}">
+          <b>ID:</b> ${bp.bp_id} |
+          <b>Echelon:</b> ${bp.echelon_level} |
+          <b>Status:</b> ${bp.validity_status} 
+        </span>
+        <br/>
+        <b>Content:</b> ${bp.content}
+      `;
+
+      // Invalidate button
+      const invalidateBtn = document.createElement("button");
+      invalidateBtn.textContent = "Mark Invalid";
+      invalidateBtn.style.marginLeft = "10px";
+      invalidateBtn.onclick = () => invalidateBP(bp.bp_id);
+
+      title.appendChild(invalidateBtn);
+
+      wrapper.appendChild(title);
+
+      // If has children, we allow toggling
+      if (bp.children && bp.children.length > 0) {
+        const toggleLink = document.createElement("span");
+        toggleLink.classList.add("toggle-children");
+        toggleLink.textContent = "[Hide Children]";
+        let collapsed = false;
+        
+        const childrenContainer = document.createElement("div");
+        childrenContainer.classList.add("children-container");
+
+        // Recursively render each child
+        bp.children.forEach(child => {
+          // child is an object
+          const childElem = createBPElement(child);
+          childrenContainer.appendChild(childElem);
+        });
+
+        toggleLink.addEventListener("click", () => {
+          collapsed = !collapsed;
+          if (collapsed) {
+            childrenContainer.style.display = "none";
+            toggleLink.textContent = "[Show Children]";
+          } else {
+            childrenContainer.style.display = "block";
+            toggleLink.textContent = "[Hide Children]";
+          }
+        });
+
+        title.appendChild(toggleLink);
+        wrapper.appendChild(childrenContainer);
+      }
+
+      return wrapper;
+    }
+
+    // Invalidate bullet point => call API => refresh
+    async function invalidateBP(bpId) {
+      try {
+        let resp = await fetch(`${API_BASE}/bullet-points/${bpId}/invalidate`, {
+          method: 'POST'
+        });
+        let data = await resp.json();
+        alert(data.msg);
+        refreshHierarchy(); // reload to see updated statuses
+      } catch (err) {
+        alert("Error invalidating bullet point: " + err);
+      }
+    }
+
+  </script>
+</body>
+</html>
