@@ -139,7 +139,7 @@ def get_bullet_point(bp_id: int):
     }
 
 
-@app.post("/bullet-points/{bp_id}/invalidate")
+@app.post("/bullet-points/invalidate/{bp_id}")
 def invalidate_bullet_point(bp_id: int):
     """
     Mark a bullet point invalid, recursively invalidating its parent bullet points.
@@ -169,15 +169,9 @@ def invalidate_bullet_point(bp_id: int):
 ###############################################################################
 # 4) New Endpoint: Get the Entire Hierarchy as a Nested JSON Tree
 ###############################################################################
+@app.get("/hierarchy/")
+def test():
 
-@app.get("/bullet-points/hierarchy")
-def get_full_hieraqrchy():
-    """
-    Returns a list of "root" bullet points, each with nested children.
-    A bullet point is a "root" if it is not a child of any other bullet point.
-    """
-
-    # 1) Build a quick map of bp_id -> { bp_id, content, validity_status, children[] }
     bp_map = {}
     with conn.cursor() as cur:
         cur.execute("""
@@ -232,6 +226,71 @@ def get_full_hieraqrchy():
     # 5) Build full nested structure for each root
     hierarchy = [build_tree(r) for r in roots]
     return hierarchy
+
+    # return {"message": bp_map}
+
+# @app.get("/bullet-points/hierarchy")
+# def get_full_hieraqrchy():
+#     """
+#     Returns a list of "root" bullet points, each with nested children.
+#     A bullet point is a "root" if it is not a child of any other bullet point.
+#     """
+
+#     # 1) Build a quick map of bp_id -> { bp_id, content, validity_status, children[] }
+#     bp_map = {}
+#     with conn.cursor() as cur:
+#         cur.execute("""
+#             SELECT bp_id, echelon_level, content, validity_status
+#             FROM bullet_points
+#         """)
+#         rows = cur.fetchall()
+#         for r in rows:
+#             bp_id = r[0]
+#             bp_map[bp_id] = {
+#                 "bp_id": bp_id,
+#                 "echelon_level": r[1],
+#                 "content": r[2],
+#                 "validity_status": r[3],
+#                 "children": []
+#             }
+
+#     # 2) Fill children relationships
+#     with conn.cursor() as cur:
+#         cur.execute("""
+#             SELECT parent_bp_id, child_bp_id
+#             FROM bullet_point_sources
+#         """)
+#         rel_rows = cur.fetchall()
+#         for (parent, child) in rel_rows:
+#             bp_map[parent]["children"].append(child)
+
+#     # 3) Identify root bullet points (those that are never 'child_bp_id')
+#     all_children = set()
+#     for (parent, child) in rel_rows:
+#         all_children.add(child)
+
+#     # Root bullet points = all bp_ids - all children
+#     all_bp_ids = set(bp_map.keys())
+#     root_ids = all_bp_ids - all_children
+#     roots = [bp_map[rid] for rid in sorted(root_ids)]
+
+#     # 4) Recursively "expand" the children so we get nested objects
+#     #    We can do it on the client side or here in Python. We'll do it here for convenience.
+
+#     def build_tree(bp_dict):
+#         # turn each child id into a nested dict
+#         new_children = []
+#         for c_id in bp_dict["children"]:
+#             child_obj = bp_map[c_id]
+#             # recursively build
+#             new_children.append(build_tree(child_obj))
+#         # sort children if you want a stable order
+#         bp_dict["children"] = new_children
+#         return bp_dict
+
+#     # 5) Build full nested structure for each root
+#     hierarchy = [build_tree(r) for r in roots]
+#     return hierarchy
 
 ###############################################################################
 # 5) Root Endpoint

@@ -116,7 +116,7 @@
     // Fetch entire hierarchy
     async function refreshHierarchy() {
       try {
-        let resp = await fetch(`${API_BASE}/bullet-points/hierarchy`);
+        let resp = await fetch(`${API_BASE}/hierarchy`);
         let data = await resp.json();
         // data is an array of "root" bullet points, each with nested children
         renderHierarchy(data);
@@ -207,7 +207,7 @@
     // Invalidate bullet point => call API => refresh
     async function invalidateBP(bpId) {
       try {
-        let resp = await fetch(`${API_BASE}/bullet-points/${bpId}/invalidate`, {
+        let resp = await fetch(`${API_BASE}/bullet-points/invalidate/${bpId}`, {
           method: 'POST'
         });
         let data = await resp.json();
