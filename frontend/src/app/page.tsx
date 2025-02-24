@@ -1,6 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, MouseEvent, ChangeEvent, JSX } from "react";
+import React, {
+  useState,
+  useEffect,
+  MouseEvent,
+  ChangeEvent,
+  JSX,
+  FC,
+} from "react";
 
 /** ====== Data Models ====== **/
 interface Team {
@@ -51,7 +58,70 @@ interface CreateRawDataResponse {
   [key: string]: unknown;
 }
 
+/** 
+ * For building out the provenance tree in the front-end:
+ */
+interface ProvenanceNode {
+  detail: BulletPointDetails;          // This bullet point's details
+  children: ProvenanceNode[];          // Child bullet points
+  rawData: number[];                   // Raw data IDs
+}
+
 const API_BASE = "http://localhost:8000";
+
+/** 
+ * This modal shows a nested/indented chain of bullet-point sources. 
+ * The `root` is the bullet point the user clicked on. 
+ * We recursively display child bullet points and raw-data references.
+ */
+const ProvenanceModal: FC<{
+  root: ProvenanceNode | null;
+  onClose: () => void;
+}> = ({ root, onClose }) => {
+  if (!root) return null;
+
+  // A small helper to render nested bullet points
+  const renderProvenanceTree = (node: ProvenanceNode, level = 0): JSX.Element => {
+    const indentPx = 20 * level; // indent each level
+    return (
+      <div style={{ marginLeft: indentPx, marginTop: "0.5em" }}>
+        <div style={{ fontWeight: "bold" }}>
+          Bullet #{node.detail.bp_id} (Team {node.detail.team_id})  
+          {" – "}
+          <span style={{ fontStyle: "italic" }}>{node.detail.validity_status}</span>
+        </div>
+        <div style={{ marginLeft: 10 }}>
+          {node.detail.content}
+          {node.rawData.length > 0 && (
+            <div style={{ fontSize: "0.9em", color: "#333", marginTop: "0.25em" }}>
+              <strong>Raw Data IDs:</strong> {node.rawData.join(", ")}
+            </div>
+          )}
+        </div>
+        {node.children.map((childNode) => renderProvenanceTree(childNode, level + 1))}
+      </div>
+    );
+  };
+
+  return (
+    <div className="prov-overlay">
+      <div className="prov-modal">
+        <h2>Provenance Graph</h2>
+        <p style={{ fontSize: "0.85em", marginTop: "-0.5em", lineHeight: "1.4em" }}>
+          Below is the chain of bullet points (and any raw data) that feed into 
+          the selected fact. Each level is indented.
+        </p>
+        <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+          {renderProvenanceTree(root)}
+        </div>
+
+        <div style={{ marginTop: "1em", textAlign: "right" }}>
+          <button onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
   // ======= State Hooks =======
@@ -71,6 +141,9 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
 
   const [newRawContent, setNewRawContent] = useState<string>("");
   const [newRawType, setNewRawType] = useState<string>("sitrep");
+
+  // For provenance modal
+  const [provenanceRoot, setProvenanceRoot] = useState<ProvenanceNode | null>(null);
 
   // ======= Effects =======
   useEffect((): void => {
@@ -113,6 +186,11 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
       const resp = await fetch(url, { method: "POST" });
       const data = (await resp.json()) as SummariesRegenerateResponse;
       alert(JSON.stringify(data));
+      // After regenerating, re-fetch the new bullet points
+      fetchHierarchy();
+      if (myTeamId) {
+        loadMySummaryBPs(myTeamId);
+      }
     } catch (err) {
       alert("Error regenerating summaries: " + String(err));
     }
@@ -234,21 +312,85 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
 
     return (
       <>
-        {relevantBPs.map((bp) => renderBulletPointHTML(bp))}
+        {relevantBPs.map((bp) => (
+          <div
+            key={bp.bp_id}
+            className={`bullet-point ${bp.validity_status === "invalid" ? "invalid" : ""}`}
+            onClick={(e): void => {
+              e.stopPropagation();
+              openProvenanceModal(bp.bp_id);
+            }}
+          >
+            <div className="bullet-id-status">
+              <span className="bp-id">#{bp.bp_id}</span>
+              <span className="bp-status">{bp.validity_status}</span>
+            </div>
+            <div className="bp-content">{bp.content}</div>
+          </div>
+        ))}
       </>
     );
   };
 
-  // ======= Common Bullet Point Renderer =======
-  const renderBulletPointHTML = (bp: BulletPoint): JSX.Element => {
+  // ======= PROVENANCE (Recursive) =======
+  const openProvenanceModal = async (bpId: number): Promise<void> => {
+    const node = await buildProvenanceNode(bpId);
+    setProvenanceRoot(node);
+  };
+
+  const buildProvenanceNode = async (bpId: number): Promise<ProvenanceNode> => {
+    const detail = await fetchBPDetails(bpId);
+
+    // Build children
+    const childNodes: ProvenanceNode[] = [];
+    for (const cId of detail.child_bullet_points) {
+      const childNode = await buildProvenanceNode(cId);
+      childNodes.push(childNode);
+    }
+
+    return {
+      detail,
+      children: childNodes,
+      rawData: detail.child_raw_data
+    };
+  };
+
+  const fetchBPDetails = async (bpId: number): Promise<BulletPointDetails> => {
+    const resp = await fetch(`${API_BASE}/bullet-points/${bpId}`);
+    if (!resp.ok) {
+      throw new Error(`Failed to fetch bullet point details for #${bpId}`);
+    }
+    return (await resp.json()) as BulletPointDetails;
+  };
+
+  // ======= Invalidate a Bullet Point =======
+  const invalidateBP = async (bpId: number): Promise<void> => {
+    try {
+      const url = `${API_BASE}/bullet-points/invalidate/${bpId}`;
+      const resp = await fetch(url, { method: "POST" });
+      if (!resp.ok) {
+        throw new Error(`HTTP error! Status: ${resp.status}`);
+      }
+      alert(`Bullet Point #${bpId} invalidated.`);
+      // Refresh data
+      fetchHierarchy();
+      if (myTeamId) loadMySummaryBPs(myTeamId);
+    } catch (err) {
+      alert("Error invalidating bullet point: " + String(err));
+    }
+  };
+
+  // ======= Common Bullet Point Renderer for My Summary =======
+  const renderMyBulletPointHTML = (bp: BulletPoint): JSX.Element => {
     const invalidClass = bp.validity_status === "invalid" ? "invalid" : "";
     return (
       <div
         key={bp.bp_id}
         className={`bullet-point ${invalidClass}`}
+        style={{ position: "relative" }}
         onClick={(e): void => {
           e.stopPropagation();
-          loadProvenance(bp.bp_id);
+          openProvenanceModal(bp.bp_id);
         }}
       >
         <div className="bullet-id-status">
@@ -256,28 +398,25 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           <span className="bp-status">{bp.validity_status}</span>
         </div>
         <div className="bp-content">{bp.content}</div>
+        {/* Invalidate button */}
+        <button
+          style={{
+            position: "absolute",
+            top: "2.5em",
+            right: "0.0em",
+            backgroundColor: "#B22222", // a red-ish color
+            fontSize: "0.75em",
+            padding: "0.2em 0.4em",
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            invalidateBP(bp.bp_id);
+          }}
+        >
+          Invalidate
+        </button>
       </div>
     );
-  };
-
-  // ======= Load Provenance for a Single Bullet Point =======
-  const loadProvenance = async (bpId: number): Promise<void> => {
-    try {
-      const resp = await fetch(`${API_BASE}/bullet-points/${bpId}`);
-      const data = (await resp.json()) as BulletPointDetails;
-      const lines: string[] = [
-        `Bullet Point #${data.bp_id}`,
-        `Team: ${data.team_id}`,
-        `Content: ${data.content}`,
-        `Status: ${data.validity_status}`,
-        `Created At: ${data.created_at || ""}`,
-        `Child BPs: ${data.child_bullet_points.join(", ")}`,
-        `Child Raw: ${data.child_raw_data.join(", ")}`,
-      ];
-      alert(lines.join("\n"));
-    } catch (err) {
-      alert("Error fetching provenance: " + String(err));
-    }
   };
 
   // ======= Render =======
@@ -288,18 +427,20 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
         dangerouslySetInnerHTML={{
           __html: `
           body {
-            font-family: Arial, sans-serif;
+            font-family: "Arial", sans-serif;
             margin: 0;
             padding: 0;
-            background: #fafafa;
+            background: #dcdcdc; /* A neutral gray */
           }
           .app-container {
             display: flex;
             flex-direction: column;
             min-height: 100vh;
           }
+
+          /* Header with more "Army" color scheme */
           .header {
-            background: #2b2b2b;
+            background: #3a4f3d; /* Army-ish green tone */
             color: #fff;
             padding: 0.5em 1em;
             display: flex;
@@ -309,6 +450,7 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           .header h1 {
             margin: 0;
             font-size: 1.2rem;
+            font-weight: bold;
           }
           .header-right {
             display: flex;
@@ -316,6 +458,9 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           }
           .header-right input {
             margin-right: 0.5em;
+            border: 1px solid #ccc;
+            padding: 0.3em;
+            font-size: 0.9rem;
           }
           .help-icon {
             margin-left: 8px;
@@ -323,14 +468,14 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
             color: #fff;
             font-weight: bold;
             border: 1px solid #ccc;
-            border-radius: 50%;
+            border-radius: 2px;
             padding: 0 5px;
           }
           .help-icon:hover {
-            background: #444;
+            background: #2a3b2d;
           }
 
-          /* Two-column layout */
+          /* Content layout: two columns, no shadow, minimal rounding. */
           .content-wrapper {
             display: flex;
             flex: 1;
@@ -338,11 +483,11 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
             gap: 1em;
           }
           .left-column, .right-column {
-            background: #fff;
+            background: #f8f8f8;
             flex: 1;
-            padding: 1em;
-            border-radius: 5px;
-            box-shadow: 0 0 4px rgba(0,0,0,0.1);
+            padding: 0.8em;
+            border: 1px solid #aaa;
+            border-radius: 2px;
             overflow-y: auto;
           }
           .left-column {
@@ -356,8 +501,8 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           .overlay {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.6);
-            display: none; /* shown when active */
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
             justify-content: center;
             align-items: center;
             z-index: 9999;
@@ -369,7 +514,8 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
             background: #fff;
             padding: 2em;
             max-width: 600px;
-            border-radius: 5px;
+            border: 2px solid #3a4f3d;
+            border-radius: 2px;
           }
           .overlay h2 {
             margin-top: 0;
@@ -379,8 +525,8 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           .help-section {
             background: #fff;
             padding: 1em;
-            border-radius: 5px;
-            box-shadow: 0 0 4px rgba(0,0,0,0.1);
+            border-radius: 2px;
+            border: 1px solid #aaa;
             margin-top: 0.5em;
             display: none;
           }
@@ -391,10 +537,14 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           /* Sections */
           .section {
             margin-bottom: 1em;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 0.5em;
           }
           .section h2 {
             margin-top: 0;
-            font-size: 1.1rem;
+            font-size: 1rem;
+            font-weight: bold;
+            color: #333;
           }
           label {
             font-weight: bold;
@@ -405,21 +555,22 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
             box-sizing: border-box;
             margin-top: 0.3em;
             margin-bottom: 0.8em;
-            padding: 0.4em;
+            padding: 0.3em;
             font-size: 0.9rem;
+            border: 1px solid #ccc;
           }
           button {
             cursor: pointer;
-            background: #4A90E2;
+            background: #2e4e2c;
             color: #fff;
-            border: none;
-            border-radius: 3px;
+            border: 1px solid #263b24;
+            border-radius: 2px;
             padding: 0.4em 0.8em;
             font-size: 0.9rem;
             margin-right: 0.5em;
           }
           button:hover {
-            background: #397ac9;
+            background: #253f21;
           }
           textarea {
             resize: vertical;
@@ -430,12 +581,12 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
             cursor: pointer;
             font-weight: bold;
             margin-top: 0.5em;
-            border: none;
-            background: #eee;
+            border: 1px solid #aaa;
+            background: #ddd;
             padding: 0.5em;
             width: 100%;
             text-align: left;
-            border-radius: 4px;
+            border-radius: 2px;
             outline: none;
             font-size: 0.9rem;
           }
@@ -450,25 +601,27 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
             display: none;
             margin: 0.5em 0;
             padding: 0.5em;
-            background: #f9f9f9;
-            border-radius: 4px;
+            background: #ececec;
+            border-radius: 2px;
+            border: 1px solid #bbb;
           }
 
           /* Bullet Points */
           .bullet-point {
             padding: 0.5em;
-            border: 1px dashed #ccc;
-            border-radius: 4px;
+            border: 1px dashed #999;
+            border-radius: 2px;
             margin-bottom: 0.5em;
-            background: #fff;
+            background: #fafafa;
             transition: background 0.2s;
+            position: relative;
           }
           .bullet-point:hover {
-            background: #f5f5f5;
+            background: #f0f0f0;
           }
           .invalid {
-            border-color: #f00;
-            color: #f00;
+            border-color: #c33;
+            color: #c33;
           }
           .bullet-id-status {
             display: flex;
@@ -489,9 +642,10 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           /* Team Info */
           .team-info {
             background: #f1f1f1;
-            padding: 1em;
-            border-radius: 4px;
+            padding: 0.8em;
+            border-radius: 2px;
             margin-bottom: 1em;
+            border: 1px solid #aaa;
           }
 
           /* Smaller list items for raw data */
@@ -508,18 +662,53 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           .footer {
             text-align: center;
             padding: 1em;
-            background: #eee;
+            background: #3a4f3d;
+            color: #fff;
             font-size: 0.8rem;
+          }
+
+          /* PROVENANCE MODAL STYLES */
+          .prov-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+          }
+          .prov-modal {
+            background: #fff;
+            border: 1px solid #333;
+            border-radius: 2px;
+            padding: 1em;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+          }
+          .prov-modal h2 {
+            margin-top: 0;
+            color: #2e4e2c;
+            font-size: 1.1rem;
           }
         `,
         }}
       />
 
+      {/* Provenance Modal */}
+      {provenanceRoot && (
+        <ProvenanceModal
+          root={provenanceRoot}
+          onClose={() => setProvenanceRoot(null)}
+        />
+      )}
+
       {/* App Container */}
       <div className="app-container">
         {/* Header */}
         <div className="header">
-          <h1>Team-Focused Summaries</h1>
+          <h1>AUSTRALIAN ARMY - Team-Focused Summaries</h1>
           <div className="header-right">
             <input
               id="ccirKeyword"
@@ -554,14 +743,15 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
             </li>
             <li>
               <strong>Subordinate Summaries</strong>: Each subordinate team also
-              produces bullet points, which get passed up automatically once you regenerate.
+              produces bullet points. These get passed up automatically once you regenerate.
             </li>
             <li>
               <strong>Combined Summary</strong>: Your team’s summary = your raw data
               + subordinates’ bullet points (filtered by CCIR if provided).
             </li>
             <li>
-              <strong>Provenance</strong>: Click any bullet point to see its chain of sources.
+              <strong>Provenance</strong>: Click any bullet point to see its chain of sources
+              (including raw data).
             </li>
           </ul>
           <button onClick={() => setIsHelpVisible(false)}>Close Help</button>
@@ -715,7 +905,7 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
                   {mySummary.length === 0 ? (
                     <p>No bullet points found for this team.</p>
                   ) : (
-                    mySummary.map((bp) => renderBulletPointHTML(bp))
+                    mySummary.map((bp) => renderMyBulletPointHTML(bp))
                   )}
                 </div>
               </div>
@@ -723,9 +913,9 @@ const TeamFocusedSummaries: React.FC = (): React.ReactElement => {
           </div>
         </div>
 
-        {/* Optional Footer */}
+        {/* Footer */}
         <div className="footer">
-          &copy; {new Date().getFullYear()} Team-Focused Summaries
+          &copy; {new Date().getFullYear()} Australian Army - All Rights Reserved
         </div>
       </div>
     </>
