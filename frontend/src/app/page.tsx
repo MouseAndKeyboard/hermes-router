@@ -21,9 +21,12 @@ export default function Home() {
 
   const fetchHierarchy = async () => {
     try {
-      const res = await fetch(`${API_BASE}/bullet-points/hierarchy`);
+      const res = await fetch(`${API_BASE}/hierarchy`);
       const data = await res.json();
-      setHierarchy(data);
+	  console.log(data);
+	  if (!data.detail) {
+		setHierarchy(data);
+	  }
     } catch (err) {
       console.error("Error fetching hierarchy:", err);
     }
@@ -133,8 +136,7 @@ export default function Home() {
         {hierarchy.length === 0 ? (
           <p>No bullet points found.</p>
         ) : (
-          //hierarchy.map((bp) => <div key={bp.bp_id}>{bp.content}</div>)
-          <p>Bullet points found or whatever.</p>
+          hierarchy.map((bp) => <div key={bp.bp_id}>{bp.content}</div>)
         )}
       </div>
     </div>

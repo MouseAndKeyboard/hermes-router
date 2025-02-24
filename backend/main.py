@@ -170,8 +170,8 @@ def invalidate_bullet_point(bp_id: int):
 # 4) New Endpoint: Get the Entire Hierarchy as a Nested JSON Tree
 ###############################################################################
 
-@app.get("/bullet-points/hierarchy")
-def get_full_hieraqrchy():
+@app.get("/hierarchy")
+def get_full_hierarchy():
     """
     Returns a list of "root" bullet points, each with nested children.
     A bullet point is a "root" if it is not a child of any other bullet point.
