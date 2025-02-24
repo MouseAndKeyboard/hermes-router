@@ -2,222 +2,322 @@
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Bullet Point MVP (Enhanced)</title>
+  <title>Bullet Point Hierarchy</title>
   <style>
     body {
       font-family: Arial, sans-serif;
-      margin: 2em;
+      margin: 1em;
+    }
+    .section {
+      border: 1px solid #ddd;
+      padding: 1em;
+      margin-bottom: 1em;
     }
     .bullet-point {
       margin-left: 20px; 
       border-left: 2px solid #ccc;
       padding-left: 10px;
+      margin-top: 10px;
     }
     .invalid {
       color: red;
       font-weight: bold;
     }
-    .toggle-children {
-      cursor: pointer;
-      color: blue;
-      margin-left: 10px;
-    }
-    .children-container {
-      margin-top: 5px;
-    }
   </style>
 </head>
 <body>
-  <h1>Bullet Point Summaries (Enhanced MVP)</h1>
 
-  <div>
-    <h2>Create SITREP</h2>
-    <textarea id="sitrep" rows="4" cols="50"></textarea><br/>
-    <label>Echelon: </label>
-    <input id="sitrepEchelon" type="text" value="Platoon" /><br/>
-    <button onclick="submitSITREP()">Submit SITREP</button>
+  <h1>Bullet Point Hierarchy MVP</h1>
+
+  <!-- TEAM Creation -->
+  <div class="section">
+    <h2>Create Team</h2>
+    <label>Team Name:</label> <input id="teamName" type="text" /><br/>
+    <label>Echelon Level:</label> <input id="teamEchelon" type="text" value="Platoon"/><br/>
+    <label>Parent Team ID (optional):</label> <input id="teamParent" type="number"/><br/>
+    <button onclick="createTeam()">Create Team</button>
   </div>
-  <hr/>
 
-  <div>
-    <h2>Link Bullet Points (Parent -> Child)</h2>
-    <label>Parent BP ID: </label><input id="parentId" type="number"/><br/>
-    <label>Child BP ID: </label><input id="childId" type="number"/><br/>
+  <!-- CCIR Creation -->
+  <div class="section">
+    <h2>Create CCIR</h2>
+    <label>Team ID:</label> <input id="ccirTeamId" type="number"/><br/>
+    <label>Description:</label> <input id="ccirDesc" type="text" size="50"/><br/>
+    <label>Keywords (comma-separated):</label> <input id="ccirKeywords" type="text" size="50"/><br/>
+    <button onclick="createCCIR()">Create CCIR</button>
+  </div>
+
+  <!-- Raw Data Creation -->
+  <div class="section">
+    <h2>Create Raw Data</h2>
+    <label>Team ID:</label> <input id="rawTeamId" type="number"/><br/>
+    <label>Content:</label><br/>
+    <textarea id="rawContent" rows="3" cols="60"></textarea><br/>
+    <label>Source Type:</label> <input id="rawSourceType" type="text" value="sitrep"/><br/>
+    <button onclick="createRaw()">Create Raw Data</button>
+  </div>
+
+  <!-- Bullet Point Creation -->
+  <div class="section">
+    <h2>Create Bullet Point</h2>
+    <label>Team ID:</label> <input id="bpTeamId" type="number"/><br/>
+    <label>Echelon Level:</label> <input id="bpEchelon" type="text" value="Platoon"/><br/>
+    <label>Content:</label><br/>
+    <textarea id="bpContent" rows="3" cols="60"></textarea><br/>
+    <label>Child Bullet Points (comma-separated IDs):</label> <input id="bpChildren" type="text"/><br/>
+    <label>Child Raw Data (comma-separated IDs):</label> <input id="bpRawChildren" type="text"/><br/>
+    <button onclick="createBulletPoint()">Create BP</button>
+  </div>
+
+  <!-- Link Bullet Points (Parent->Child) -->
+  <div class="section">
+    <h2>Link Bullet Points</h2>
+    <label>Parent ID:</label> <input id="linkParentId" type="number"/>
+    <label>Child ID:</label> <input id="linkChildId" type="number"/>
     <button onclick="linkPoints()">Link Child</button>
   </div>
-  <hr/>
 
-  <h2>All Bullet Points (Hierarchy View)</h2>
-  <button onclick="refreshHierarchy()">Refresh Hierarchy</button>
-  <div id="hierarchyContainer"></div>
+  <!-- Invalidate a Bullet Point -->
+  <div class="section">
+    <h2>Invalidate Bullet Point</h2>
+    <label>BP ID:</label> <input id="invBpId" type="number"/>
+    <button onclick="invalidateBP()">Invalidate</button>
+  </div>
+
+  <!-- Display Global Hierarchy -->
+  <div class="section">
+    <h2>Global Bullet Point Hierarchy</h2>
+    <button onclick="loadHierarchy()">Refresh Global Hierarchy</button>
+    <div id="hierarchyContainer"></div>
+  </div>
+
+  <!-- NEW: Team-Focused Hierarchy -->
+  <div class="section">
+    <h2>Team-Focused Hierarchy</h2>
+    <label>Team ID:</label> 
+    <input id="focusTeamId" type="number" placeholder="e.g. 2"/>
+    <label>Include Sub-teams?</label> 
+    <input id="focusIncludeSubs" type="checkbox" checked/>
+    <button onclick="loadTeamHierarchy()">Load Team Hierarchy</button>
+    <div id="teamHierarchyContainer"></div>
+  </div>
 
   <script>
-    const API_BASE = "http://localhost:8000";  // Adjust to your backend address
+    const API_BASE = "http://localhost:8000";  // Adjust for your environment
 
-    // Load entire tree once the page is loaded
-    window.addEventListener("DOMContentLoaded", () => {
-      refreshHierarchy();
-    });
+    async function createTeam() {
+      const teamName = document.getElementById("teamName").value;
+      const echelon = document.getElementById("teamEchelon").value;
+      const parent = document.getElementById("teamParent").value || null;
 
-    // Submit SITREP => create bullet point
-    async function submitSITREP() {
-      const content = document.getElementById("sitrep").value;
-      const echelon = document.getElementById("sitrepEchelon").value || "Platoon";
-      const payload = { content, echelon_level: echelon };
+      const payload = {
+        team_name: teamName,
+        echelon_level: echelon,
+        parent_team_id: parent ? parseInt(parent) : null
+      };
 
       try {
-        const resp = await fetch(`${API_BASE}/raw-data`, {
+        let resp = await fetch(`${API_BASE}/teams`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload)
         });
-        const data = await resp.json();
-        if (data.bullet_point_id) {
-          alert(`Created bullet point ID: ${data.bullet_point_id}\nSummary: ${data.summary_content}`);
-          document.getElementById("sitrep").value = "";
-          // Reload the hierarchy so we see the new bullet point
-          refreshHierarchy();
-        } else {
-          alert("Error: " + JSON.stringify(data));
-        }
+        let data = await resp.json();
+        alert(JSON.stringify(data));
       } catch (err) {
-        alert("Error creating SITREP: " + err);
+        alert("Error creating team: " + err);
       }
     }
 
-    // Link bullet points
-    async function linkPoints() {
-      let parentId = parseInt(document.getElementById("parentId").value);
-      let childId = parseInt(document.getElementById("childId").value);
+    async function createCCIR() {
+      const teamId = parseInt(document.getElementById("ccirTeamId").value);
+      const desc = document.getElementById("ccirDesc").value;
+      const kw = document.getElementById("ccirKeywords").value
+        ? document.getElementById("ccirKeywords").value.split(',').map(s => s.trim())
+        : [];
 
-      if (!parentId || !childId) {
-        alert("Please enter valid parent and child IDs.");
+      const payload = {
+        team_id: teamId,
+        description: desc,
+        keywords: kw
+      };
+      try {
+        let resp = await fetch(`${API_BASE}/ccirs`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        let data = await resp.json();
+        alert("CCIR created: " + JSON.stringify(data));
+      } catch (err) {
+        alert("Error creating CCIR: " + err);
+      }
+    }
+
+    async function createRaw() {
+      const teamId = parseInt(document.getElementById("rawTeamId").value);
+      const content = document.getElementById("rawContent").value;
+      const stype = document.getElementById("rawSourceType").value;
+
+      const payload = { team_id: teamId, content, source_type: stype };
+
+      try {
+        let resp = await fetch(`${API_BASE}/raw-data`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        let data = await resp.json();
+        alert("Created Raw Data: " + JSON.stringify(data));
+      } catch (err) {
+        alert("Error creating raw data: " + err);
+      }
+    }
+
+    async function createBulletPoint() {
+      const teamId = parseInt(document.getElementById("bpTeamId").value);
+      const echelon = document.getElementById("bpEchelon").value;
+      const content = document.getElementById("bpContent").value;
+
+      const childBPsStr = document.getElementById("bpChildren").value;
+      let childBPs = childBPsStr
+        ? childBPsStr.split(',').map(x => parseInt(x.trim()))
+        : [];
+
+      const childRawsStr = document.getElementById("bpRawChildren").value;
+      let childRaws = childRawsStr
+        ? childRawsStr.split(',').map(x => parseInt(x.trim()))
+        : [];
+
+      const payload = {
+        team_id: teamId,
+        echelon_level: echelon,
+        content: content,
+        child_bps: childBPs,
+        child_raws: childRaws
+      };
+
+      try {
+        let resp = await fetch(`${API_BASE}/bullet-points`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        let data = await resp.json();
+        alert("Created Bullet Point: " + JSON.stringify(data));
+      } catch (err) {
+        alert("Error creating bullet point: " + err);
+      }
+    }
+
+    async function linkPoints() {
+      const parent = parseInt(document.getElementById("linkParentId").value);
+      const child = parseInt(document.getElementById("linkChildId").value);
+
+      if (!parent || !child) {
+        alert("Invalid parent/child IDs");
         return;
       }
 
       try {
         let resp = await fetch(`${API_BASE}/bullet-points/link`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ parent_id: parentId, child_id: childId })
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ parent_id: parent, child_id: child })
         });
         let data = await resp.json();
-        if (data.msg) {
-          alert(data.msg);
-          refreshHierarchy();
-        } else if (data.detail) {
-          alert("Error: " + data.detail);
-        }
+        alert(JSON.stringify(data));
       } catch (err) {
-        alert("Error linking bullet points: " + err);
+        alert("Error linking points: " + err);
       }
     }
 
-    // Fetch entire hierarchy
-    async function refreshHierarchy() {
-      try {
-        let resp = await fetch(`${API_BASE}/hierarchy`);
-        let data = await resp.json();
-        // data is an array of "root" bullet points, each with nested children
-        renderHierarchy(data);
-      } catch (err) {
-        alert("Error fetching hierarchy: " + err);
-      }
-    }
-
-    // Render the entire tree
-    function renderHierarchy(roots) {
-      const container = document.getElementById("hierarchyContainer");
-      container.innerHTML = ""; // Clear old tree
-
-      if (!roots.length) {
-        container.innerHTML = "<p>No bullet points found.</p>";
+    async function invalidateBP() {
+      const bpId = parseInt(document.getElementById("invBpId").value);
+      if (!bpId) {
+        alert("Invalid bullet point ID");
         return;
       }
 
-      roots.forEach(rootBP => {
-        const bpElement = createBPElement(rootBP);
-        container.appendChild(bpElement);
-      });
-    }
-
-    // Create an HTML element for a bullet point (and recursively for its children)
-    function createBPElement(bp) {
-      const wrapper = document.createElement("div");
-      wrapper.classList.add("bullet-point");
-
-      // Title row
-      const title = document.createElement("div");
-      let statusClass = (bp.validity_status === "invalid") ? "invalid" : "";
-      title.innerHTML = `
-        <span class="${statusClass}">
-          <b>ID:</b> ${bp.bp_id} |
-          <b>Echelon:</b> ${bp.echelon_level} |
-          <b>Status:</b> ${bp.validity_status} 
-        </span>
-        <br/>
-        <b>Content:</b> ${bp.content}
-      `;
-
-      // Invalidate button
-      const invalidateBtn = document.createElement("button");
-      invalidateBtn.textContent = "Mark Invalid";
-      invalidateBtn.style.marginLeft = "10px";
-      invalidateBtn.onclick = () => invalidateBP(bp.bp_id);
-
-      title.appendChild(invalidateBtn);
-
-      wrapper.appendChild(title);
-
-      // If has children, we allow toggling
-      if (bp.children && bp.children.length > 0) {
-        const toggleLink = document.createElement("span");
-        toggleLink.classList.add("toggle-children");
-        toggleLink.textContent = "[Hide Children]";
-        let collapsed = false;
-        
-        const childrenContainer = document.createElement("div");
-        childrenContainer.classList.add("children-container");
-
-        // Recursively render each child
-        bp.children.forEach(child => {
-          // child is an object
-          const childElem = createBPElement(child);
-          childrenContainer.appendChild(childElem);
-        });
-
-        toggleLink.addEventListener("click", () => {
-          collapsed = !collapsed;
-          if (collapsed) {
-            childrenContainer.style.display = "none";
-            toggleLink.textContent = "[Show Children]";
-          } else {
-            childrenContainer.style.display = "block";
-            toggleLink.textContent = "[Hide Children]";
-          }
-        });
-
-        title.appendChild(toggleLink);
-        wrapper.appendChild(childrenContainer);
-      }
-
-      return wrapper;
-    }
-
-    // Invalidate bullet point => call API => refresh
-    async function invalidateBP(bpId) {
       try {
         let resp = await fetch(`${API_BASE}/bullet-points/invalidate/${bpId}`, {
           method: 'POST'
         });
         let data = await resp.json();
-        alert(data.msg);
-        refreshHierarchy(); // reload to see updated statuses
+        alert(JSON.stringify(data));
       } catch (err) {
         alert("Error invalidating bullet point: " + err);
       }
     }
 
+    // === GLOBAL HIERARCHY =====================================================
+    async function loadHierarchy() {
+      const container = document.getElementById("hierarchyContainer");
+      container.innerHTML = "Loading...";
+      try {
+        let resp = await fetch(`${API_BASE}/hierarchy`);
+        let data = await resp.json();
+        container.innerHTML = "";
+        data.forEach(rootBP => {
+          container.appendChild(renderBP(rootBP));
+        });
+      } catch (err) {
+        container.innerHTML = "Error loading hierarchy: " + err;
+      }
+    }
+
+    // === TEAM-FOCUSED HIERARCHY ==============================================
+    async function loadTeamHierarchy() {
+      const container = document.getElementById("teamHierarchyContainer");
+      container.innerHTML = "Loading...";
+      const teamId = parseInt(document.getElementById("focusTeamId").value);
+      const includeSubs = document.getElementById("focusIncludeSubs").checked;
+
+      if (!teamId) {
+        container.innerHTML = "Please specify a valid Team ID.";
+        return;
+      }
+
+      // GET /bullet-points/team/{team_id}/hierarchy?include_subteams=...
+      const url = `${API_BASE}/bullet-points/team/${teamId}/hierarchy?include_subteams=${includeSubs}`;
+
+      try {
+        let resp = await fetch(url);
+        let data = await resp.json();
+        container.innerHTML = "";
+        data.forEach(rootBP => {
+          container.appendChild(renderBP(rootBP));
+        });
+      } catch (err) {
+        container.innerHTML = "Error loading team hierarchy: " + err;
+      }
+    }
+
+    // === Render a bullet point (recursively) =================================
+    function renderBP(bp) {
+      const wrapper = document.createElement("div");
+      wrapper.classList.add("bullet-point");
+      if (bp.validity_status === "invalid") {
+        wrapper.classList.add("invalid");
+      }
+      wrapper.innerHTML = `
+        <div>
+          <b>ID:</b> ${bp.bp_id} |
+          <b>Team:</b> ${bp.team_id} |
+          <b>Echelon:</b> ${bp.echelon_level} |
+          <b>Status:</b> ${bp.validity_status}
+        </div>
+        <div><b>Content:</b> ${bp.content}</div>
+      `;
+
+      if (bp.children && bp.children.length > 0) {
+        bp.children.forEach(child => {
+          wrapper.appendChild(renderBP(child));
+        });
+      }
+      return wrapper;
+    }
   </script>
+
 </body>
 </html>
